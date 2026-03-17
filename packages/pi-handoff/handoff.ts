@@ -27,9 +27,17 @@ import { Type } from "@sinclair/typebox";
 // ---------------------------------------------------------------------------
 const CONTEXT_THRESHOLD_PERCENT = 90;
 const AFK_TIMEOUT_MS = 60_000;
+const CONTEXT_GUARD_STATE_TYPE = "pi-handoff:context-guard-state";
+
+interface ContextGuardState {
+	suppressed: boolean;
+	reason: "declined" | "dismissed";
+}
+
+type ContextGuardSessionManager = Pick<ExtensionCommandContext["sessionManager"], "getBranch">;
 
 // ---------------------------------------------------------------------------
-// Shared: build the parent session reference for the final prompt
+// Shared helpers
 // ---------------------------------------------------------------------------
 
 function buildFinalPrompt(body: string, sessionFile: string | undefined): string {
@@ -41,6 +49,35 @@ function buildFinalPrompt(body: string, sessionFile: string | undefined): string
 		);
 	}
 	return body;
+}
+
+function isContextGuardState(value: unknown): value is ContextGuardState {
+	if (!value || typeof value !== "object") return false;
+
+	const candidate = value as Partial<ContextGuardState>;
+	return (
+		candidate.suppressed === true &&
+		(candidate.reason === "declined" || candidate.reason === "dismissed")
+	);
+}
+
+function isContextGuardSuppressed(sessionManager: ContextGuardSessionManager): boolean {
+	const branch = sessionManager.getBranch();
+
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry.type !== "custom" || entry.customType !== CONTEXT_GUARD_STATE_TYPE) continue;
+		return isContextGuardState(entry.data) && entry.data.suppressed;
+	}
+
+	return false;
+}
+
+function suppressContextGuard(pi: ExtensionAPI, reason: ContextGuardState["reason"]): void {
+	pi.appendEntry(CONTEXT_GUARD_STATE_TYPE, {
+		suppressed: true,
+		reason,
+	} satisfies ContextGuardState);
 }
 
 // ---------------------------------------------------------------------------
@@ -76,13 +113,15 @@ async function agentHandoff(
 export default function (pi: ExtensionAPI) {
 	// ── Context guard state ────────────────────────────────────────────────
 	let contextGuardPrompted = false;
+	let contextGuardSuppressed = false;
 
-	pi.on("session_start", () => {
+	pi.on("session_start", (_event, ctx) => {
 		contextGuardPrompted = false;
+		contextGuardSuppressed = isContextGuardSuppressed(ctx.sessionManager);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
-		if (contextGuardPrompted) return;
+		if (contextGuardPrompted || contextGuardSuppressed) return;
 		if (!ctx.hasUI) return;
 
 		const usage = ctx.getContextUsage();
@@ -92,16 +131,35 @@ export default function (pi: ExtensionAPI) {
 		const pct = Math.round(usage.percent);
 		const sessionBefore = ctx.sessionManager.getSessionId();
 
+		const timeoutController = new AbortController();
+		let didTimeout = false;
+		const timeoutId = setTimeout(() => {
+			didTimeout = true;
+			timeoutController.abort();
+		}, AFK_TIMEOUT_MS);
+
 		const choice = await ctx.ui.select(
 			`Context at ${pct}% — handoff to a new session?`,
 			["Yes, handoff", "No, keep going"],
-			{ timeout: AFK_TIMEOUT_MS },
+			{ signal: timeoutController.signal },
 		);
+
+		clearTimeout(timeoutId);
 
 		// Session changed while waiting (e.g. handoff tool fired) — bail
 		if (ctx.sessionManager.getSessionId() !== sessionBefore) return;
 
-		if (choice === "No, keep going") return;
+		if (choice === "No, keep going") {
+			contextGuardSuppressed = true;
+			suppressContextGuard(pi, "declined");
+			return;
+		}
+
+		if (!choice && !didTimeout) {
+			contextGuardSuppressed = true;
+			suppressContextGuard(pi, "dismissed");
+			return;
+		}
 
 		if (!choice) {
 			ctx.ui.notify("No response — auto-handoff to preserve context.", "warning");
@@ -164,10 +222,11 @@ export default function (pi: ExtensionAPI) {
 			}),
 		}),
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx: ExtensionCommandContext) {
 			const error = await agentHandoff(pi, ctx, params.prompt);
 			return {
 				content: [{ type: "text", text: error ?? "Handoff complete. New session started." }],
+				details: {},
 			};
 		},
 	});

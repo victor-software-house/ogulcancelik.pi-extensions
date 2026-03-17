@@ -43,7 +43,7 @@ Context at 92% — handoff to a new session?
   No, keep going
 ```
 
-If you pick yes — or don't respond within 60 seconds — the agent automatically writes a handoff prompt and starts a new session. No context lost silently.
+If you pick yes — or don't respond within 60 seconds — the agent automatically writes a handoff prompt and starts a new session. If you pick no or dismiss the prompt, it keeps going in the current session and won't ask again for that session.
 
 ## How it works
 
