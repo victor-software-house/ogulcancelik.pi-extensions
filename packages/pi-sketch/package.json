@@ -1,6 +1,6 @@
 {
   "name": "@ogulcancelik/pi-sketch",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Quick sketch pad for pi - draw in browser, send to models",
   "keywords": [
     "pi-package",

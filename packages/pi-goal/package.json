@@ -1,6 +1,6 @@
 {
   "name": "@ogulcancelik/pi-goal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Autonomous goal pursuit for pi. Break work into tasks, spawn worker agents, track progress via files on disk.",
   "type": "module",
   "keywords": [
