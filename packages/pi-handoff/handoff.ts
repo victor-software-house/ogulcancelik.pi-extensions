@@ -209,6 +209,7 @@ export default function (pi: ExtensionAPI) {
 		label: "Handoff",
 		description:
 			"Transfer context to a new focused session. ONLY use this when the user explicitly asks for a handoff. " +
+			"NEVER call this yourself — only when the user says 'handoff' or the context guard at 90% triggers it. " +
 			"You are starting a new session — the next agent has NO context from this conversation. " +
 			"Write a complete, self-contained prompt that includes: " +
 			"(1) relevant context and decisions from this session, " +
