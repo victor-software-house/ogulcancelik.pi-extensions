@@ -1,3 +1,5 @@
+> **Status**: Currently broken on the latest pi release (v0.61.1). The extension requires a fix upstream — tool `execute` handlers only get `ExtensionContext` without `newSession`. The maintainer is working on a `runWhenIdle` API to address this.
+
 # pi-handoff
 
 Context-aware session handoff for [pi](https://github.com/badlogic/pi-mono). Transfer context to a new session via command, tool, or automatic context guard.
