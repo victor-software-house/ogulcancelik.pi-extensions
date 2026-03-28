@@ -907,7 +907,10 @@ export default function sessionRecallExtension(pi: ExtensionAPI) {
 			}
 
 			try {
-				const apiKey = await ctx.modelRegistry.getApiKey(queryModel);
+				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(queryModel);
+				if (!auth.ok) {
+					return errorResult(`Error resolving model auth: ${auth.error}`);
+				}
 
 				const contextNote = wasWindowed
 					? "\n\n**Note:** This is a large session. The conversation has been windowed to focus on sections most relevant to your question. Some messages were omitted (marked with [...])."
@@ -927,7 +930,7 @@ export default function sessionRecallExtension(pi: ExtensionAPI) {
 				const response = await complete(
 					queryModel,
 					{ systemPrompt: QUERY_SYSTEM_PROMPT, messages: [userMessage] },
-					{ apiKey, signal },
+					{ apiKey: auth.apiKey, headers: auth.headers, signal },
 				);
 
 				if (response.stopReason === "aborted") {
