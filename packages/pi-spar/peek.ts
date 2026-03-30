@@ -601,7 +601,7 @@ export class SparPeekOverlay {
 			this.followMode = false;
 			this.scrollOffset = 0;
 			this.tui.requestRender();
-		} else if (data === "G") {
+		} else if (data === "G" || matchesKey(data, "shift+g")) {
 			this.followMode = true;
 			this.scrollOffset = 999999;
 			this.tui.requestRender();
