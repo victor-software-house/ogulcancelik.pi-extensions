@@ -4,6 +4,7 @@ Extensions for [pi](https://github.com/badlogic/pi-mono), the terminal-based cod
 
 | Package | Description |
 |---------|-------------|
+| [pi-ghost](packages/pi-ghost) | Ephemeral side conversation overlay — open a temporary ghost session inside the current pi UI |
 | [pi-ghostty-theme-sync](packages/pi-ghostty-theme-sync) | Sync pi theme with Ghostty terminal colors |
 | [pi-goal](packages/pi-goal) | Break work into tasks, spawn parallel worker agents |
 | [pi-handoff](packages/pi-handoff) | Transfer context to a new session with full briefing |
