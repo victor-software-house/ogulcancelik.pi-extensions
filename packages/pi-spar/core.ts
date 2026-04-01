@@ -5,6 +5,7 @@
  */
 
 import { spawn } from "child_process";
+import { randomUUID } from "crypto";
 import * as readline from "readline";
 import * as path from "path";
 import * as fs from "fs";
@@ -17,7 +18,7 @@ import * as os from "os";
 
 // Session storage in pi's config directory (persistent across reboots)
 const SPAR_DIR = path.join(os.homedir(), ".pi", "agent", "spar");
-const SESSION_DIR = path.join(SPAR_DIR, "sessions");
+export const SESSION_DIR = path.join(SPAR_DIR, "sessions");
 const CONFIG_PATH = path.join(SPAR_DIR, "config.json");
 
 // Default timeout: 30 minutes (sliding - resets on activity)
@@ -144,8 +145,81 @@ function getSessionLogPath(sessionId: string): string {
 	return path.join(SESSION_DIR, `${sessionId}.log`);
 }
 
-function getSocketPath(sessionId: string): string {
+export interface PeekMarker {
+	pid: number;
+	startedAt: number;
+	token: string;
+}
+
+export function getSocketPath(sessionId: string): string {
+	if (process.platform === "win32") {
+		return `\\\\.\\pipe\\pi-spar-${sessionId}`;
+	}
 	return `/tmp/pi-spar-${sessionId}.sock`;
+}
+
+export function getPeekMarkerPath(sessionId: string): string {
+	return path.join(SESSION_DIR, `${sessionId}.peek.json`);
+}
+
+function readPeekMarker(sessionId: string): PeekMarker | null | undefined {
+	const markerPath = getPeekMarkerPath(sessionId);
+	if (!fs.existsSync(markerPath)) return undefined;
+
+	try {
+		const marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+		if (
+			typeof marker?.pid === "number" &&
+			typeof marker?.startedAt === "number" &&
+			typeof marker?.token === "string"
+		) {
+			return marker;
+		}
+	} catch {}
+
+	return null;
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error: any) {
+		return error?.code === "EPERM";
+	}
+}
+
+export function markPeekActive(sessionId: string, marker: PeekMarker): void {
+	ensureSessionDir();
+	fs.writeFileSync(getPeekMarkerPath(sessionId), JSON.stringify(marker, null, 2));
+}
+
+export function clearPeekActive(sessionId: string, owner?: Pick<PeekMarker, "pid" | "token">): void {
+	try {
+		if (owner) {
+			const currentMarker = readPeekMarker(sessionId);
+			if (!currentMarker) return;
+			if (currentMarker.pid !== owner.pid || currentMarker.token !== owner.token) {
+				return;
+			}
+		}
+		fs.unlinkSync(getPeekMarkerPath(sessionId));
+	} catch {}
+}
+
+export function isPeekActive(sessionId: string): boolean {
+	const marker = readPeekMarker(sessionId);
+	if (marker === undefined) {
+		return false;
+	}
+	if (marker === null) {
+		return false;
+	}
+	if (isProcessAlive(marker.pid)) {
+		return true;
+	}
+	clearPeekActive(sessionId, { pid: marker.pid, token: marker.token });
+	return false;
 }
 
 // =============================================================================
@@ -217,7 +291,9 @@ class SessionLogger {
 class EventBroadcaster {
 	private server: net.Server | null = null;
 	private connections: net.Socket[] = [];
+	private sessionId: string;
 	private socketPath: string;
+	private marker: PeekMarker;
 	
 	// Track state for sync on connect
 	private currentStatus: "thinking" | "streaming" | "tool" | "done" = "thinking";
@@ -226,15 +302,23 @@ class EventBroadcaster {
 	private currentUserMessage: any = null;
 
 	constructor(sessionId: string) {
+		this.sessionId = sessionId;
 		this.socketPath = getSocketPath(sessionId);
+		this.marker = {
+			pid: process.pid,
+			startedAt: Date.now(),
+			token: randomUUID(),
+		};
 	}
 
 	start(): void {
-		try {
-			if (fs.existsSync(this.socketPath)) {
-				fs.unlinkSync(this.socketPath);
-			}
-		} catch {}
+		if (process.platform !== "win32") {
+			try {
+				if (fs.existsSync(this.socketPath)) {
+					fs.unlinkSync(this.socketPath);
+				}
+			} catch {}
+		}
 
 		this.server = net.createServer((conn) => {
 			this.connections.push(conn);
@@ -259,7 +343,26 @@ class EventBroadcaster {
 			});
 		});
 
-		this.server.listen(this.socketPath);
+		this.server.on("listening", () => {
+			markPeekActive(this.sessionId, this.marker);
+		});
+
+		this.server.on("error", () => {
+			clearPeekActive(this.sessionId, this.marker);
+			for (const conn of this.connections) {
+				try { conn.destroy(); } catch {}
+			}
+			this.connections = [];
+			this.server?.close();
+			this.server = null;
+		});
+
+		try {
+			this.server.listen(this.socketPath);
+		} catch {
+			clearPeekActive(this.sessionId, this.marker);
+			this.server = null;
+		}
 	}
 
 	broadcast(event: any): void {
@@ -295,6 +398,8 @@ class EventBroadcaster {
 	}
 
 	stop(): void {
+		clearPeekActive(this.sessionId, this.marker);
+
 		for (const conn of this.connections) {
 			try { conn.end(); } catch {}
 		}
@@ -305,11 +410,13 @@ class EventBroadcaster {
 			this.server = null;
 		}
 		
-		try {
-			if (fs.existsSync(this.socketPath)) {
-				fs.unlinkSync(this.socketPath);
-			}
-		} catch {}
+		if (process.platform !== "win32") {
+			try {
+				if (fs.existsSync(this.socketPath)) {
+					fs.unlinkSync(this.socketPath);
+				}
+			} catch {}
+		}
 	}
 }
 
@@ -461,9 +568,11 @@ export function deleteSession(name: string): void {
 	for (const f of files) {
 		try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
 	}
-	// Clean up socket if still around
-	const socketPath = getSocketPath(name);
-	try { if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath); } catch {}
+	clearPeekActive(name);
+	if (process.platform !== "win32") {
+		const socketPath = getSocketPath(name);
+		try { if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath); } catch {}
+	}
 }
 
 /**

@@ -14,7 +14,12 @@ import {
 	ToolExecutionComponent,
 	UserMessageComponent,
 } from "@mariozechner/pi-coding-agent";
-import { getModelAlias } from "./core.js";
+import {
+	SESSION_DIR,
+	getModelAlias,
+	getSocketPath,
+	isPeekActive,
+} from "./core.js";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
 	Container,
@@ -25,18 +30,11 @@ import {
 } from "@mariozechner/pi-tui";
 import * as fs from "fs";
 import * as net from "net";
-import * as os from "os";
 import * as path from "path";
 
 // =============================================================================
 // Constants
 // =============================================================================
-
-const SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "spar", "sessions");
-
-function getSocketPath(sessionId: string): string {
-	return `/tmp/pi-spar-${sessionId}.sock`;
-}
 
 function getSessionFile(sessionId: string): string {
 	return path.join(SESSION_DIR, `${sessionId}.jsonl`);
@@ -62,7 +60,7 @@ export function listPeekableSessions(): PeekableSession[] {
 	for (const f of fs.readdirSync(SESSION_DIR)) {
 		if (!f.endsWith(".jsonl")) continue;
 		const name = f.replace(".jsonl", "");
-		const active = fs.existsSync(getSocketPath(name));
+		const active = isPeekActive(name);
 
 		let messageCount = 0;
 		let model = "";
@@ -107,7 +105,7 @@ export function sessionExists(name: string): boolean {
 }
 
 export function isSessionActive(name: string): boolean {
-	return fs.existsSync(getSocketPath(name));
+	return isPeekActive(name);
 }
 
 export function findRecentSession(sessionManager: any): string | null {
@@ -132,9 +130,12 @@ export function findRecentSession(sessionManager: any): string | null {
 
 export function findActiveSession(): string | null {
 	try {
-		const sockets = fs.readdirSync("/tmp").filter(f => f.startsWith("pi-spar-") && f.endsWith(".sock"));
-		if (sockets.length > 0) {
-			return sockets[0].replace("pi-spar-", "").replace(".sock", "");
+		const markers = fs.readdirSync(SESSION_DIR)
+			.filter(f => f.endsWith(".peek.json"))
+			.map(f => f.replace(/\.peek\.json$/, ""));
+
+		for (const sessionId of markers) {
+			if (isPeekActive(sessionId)) return sessionId;
 		}
 	} catch {}
 	return null;
@@ -178,6 +179,7 @@ export class SparPeekOverlay {
 
 	// Polling
 	private pollInterval: ReturnType<typeof setInterval> | null = null;
+	private lastConnectAttemptAt = 0;
 
 	// Render cache
 	private cachedLines: string[] | null = null;
@@ -309,7 +311,7 @@ export class SparPeekOverlay {
 
 	private connectSocket(): void {
 		const socketPath = getSocketPath(this.sessionId);
-		if (!fs.existsSync(socketPath)) return;
+		this.lastConnectAttemptAt = Date.now();
 
 		try {
 			this.socket = net.connect(socketPath);
@@ -556,7 +558,11 @@ export class SparPeekOverlay {
 	// =========================================================================
 
 	private poll(): void {
-		if (!this.socket && isSessionActive(this.sessionId)) {
+		if (
+			!this.socket &&
+			isSessionActive(this.sessionId) &&
+			Date.now() - this.lastConnectAttemptAt >= 2000
+		) {
 			this.connectSocket();
 		}
 
