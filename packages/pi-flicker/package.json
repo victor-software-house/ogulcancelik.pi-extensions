@@ -1,0 +1,35 @@
+{
+  "name": "@ogulcancelik/pi-flicker",
+  "version": "1.0.0",
+  "description": "A pi extension that brings Claude Code flicker to pi",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "flicker"
+  ],
+  "author": "Can Celik",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ogulcancelik/pi-extensions.git",
+    "directory": "packages/pi-flicker"
+  },
+  "bugs": {
+    "url": "https://github.com/ogulcancelik/pi-extensions/issues"
+  },
+  "homepage": "https://github.com/ogulcancelik/pi-extensions/tree/main/packages/pi-flicker#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE"
+  ]
+}
