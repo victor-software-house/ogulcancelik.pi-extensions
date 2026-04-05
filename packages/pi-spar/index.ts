@@ -1,6 +1,6 @@
 /**
  * Spar Extension - Agent-to-agent sparring
- * 
+ *
  * Provides a `spar` tool for back-and-forth dialogue with peer AI models,
  * plus /spar and /spview commands for viewing spar sessions.
  */
@@ -56,19 +56,17 @@ export default function (pi: ExtensionAPI) {
 		name: "spar",
 		label: "Spar",
 		get description() {
-			return `Spar with another AI model — this is a **conversation**, not a lookup.
+			return `Spar with another AI model — a conversation, not a lookup.
 
-Use for debugging, design, architecture review, or challenging your own thinking.
-Sessions persist, so follow up, push back, disagree. If they raise a point you hadn't
-considered, dig into it. If you disagree with something, counter it. Don't just take the
-first response and run — that's querying, not sparring.
+Use only when the user asks, or when you have a clear user-visible reason.
 
-**Peer limitations:** The peer can ONLY explore the codebase: read files, grep, find, ls.
-No bash, no web access, no network, no file writes. Don't ask them to look things up online
-or run commands — they can't. Give them file paths and let them dig through code.
+Prefer a different model family when possible.
 
-**Model selection:** Prefer sparring with a different model family than yourself.
-Different architectures have different biases and blindspots — that's the value.
+**Peer limitations:** read files, grep, find, and ls only. No bash, web, network, or file writes.
+
+**Important:**
+- if they raise a point you hadn't considered, dig into it. If you disagree, counter it. Don't take the first response and run.
+- Give file paths and pointers, not full content.
 
 **Configured models:**
 ${getConfiguredModelsDescription()}
@@ -76,35 +74,7 @@ ${getConfiguredModelsDescription()}
 **Actions:**
 - \`send\` - Send a message to a spar session (creates session if needed)
 - \`list\` - List existing spar sessions
-- \`history\` - View past exchanges from a session (default: last 5)
-
-**Tips:**
-- Give file paths and pointers, not full content — let them explore
-- Ask for ranked hypotheses, not just "what do you think"
-- Request critique: "What's the strongest case against my approach?"
-- State your current position so they have something to push against
-
-**Multi-party facilitation:** For big design questions, create multiple specialized sessions
-with different models/roles. Name them \`{topic}-{role}\` (e.g., \`auth-design\`, \`auth-security\`).
-Give each a focused persona in the first message. Then facilitate: forward interesting points
-between them, let them argue through you, decide who to ask next based on the conversation.
-You're the switchboard operator — each expert is in their own room, you relay selectively.
-
-**Example:**
-\`\`\`
-spar({
-  action: "send",
-  session: "flow-field-debug",
-  model: "opus",
-  message: "I'm debugging flow field pathfinding. Enemies walk away from player instead of toward. Check scripts/HordeManagerCS.cs line 358-430 for the BFS implementation. I think the gradient is inverted in the BFS neighbor loop — what do you see?"
-})
-// ... read their response, then follow up:
-spar({
-  action: "send",
-  session: "flow-field-debug",
-  message: "Interesting point about the cost function, but I don't think that's it because the distances look correct in the debug output. What about the direction vector calculation at line 415?"
-})
-\`\`\``;
+- \`history\` - View past exchanges from a session (default: last 5)`;
 		},
 
 		parameters: Type.Object({
@@ -145,7 +115,7 @@ spar({
 			// Handle list action
 			if (action === "list") {
 				const sessions = listSessions();
-				
+
 				if (sessions.length === 0) {
 					return {
 						content: [{ type: "text", text: "No spar sessions found." }],
@@ -187,7 +157,7 @@ spar({
 				}
 
 				const exchanges = getSessionHistory(session, count ?? 5);
-				
+
 				if (exchanges.length === 0) {
 					return {
 						content: [{ type: "text", text: `No exchanges in session "${session}" yet.` }],
@@ -198,7 +168,7 @@ spar({
 				const lines: string[] = [];
 				lines.push(`Session: ${session} (${info.modelId})`);
 				lines.push(`Showing last ${exchanges.length} exchange(s):\n`);
-				
+
 				for (let i = 0; i < exchanges.length; i++) {
 					const ex = exchanges[i];
 					lines.push(`--- Exchange ${i + 1} ---`);
@@ -262,13 +232,13 @@ spar({
 							const elapsed = Math.floor((Date.now() - startTime) / 1000);
 							onUpdate?.({
 								content: [{ type: "text", text: `${progress.status}...` }],
-								details: { 
-									progress: { 
-										status: progress.status, 
+								details: {
+									progress: {
+										status: progress.status,
 										elapsed,
 										toolName: progress.toolName,
 										model: modelName,
-									} 
+									}
 								},
 							});
 						},
@@ -282,7 +252,7 @@ spar({
 
 					return {
 						content: [{ type: "text", text: result.response + usageText }],
-						details: { 
+						details: {
 							session,
 							message,  // Store original message for expanded view
 							model: model || existingSession?.model,
@@ -308,52 +278,52 @@ spar({
 		// Custom rendering for cleaner display
 		renderCall(args: any, theme: Theme) {
 			const { action, session, model, count } = args;
-			
+
 			if (action === "list") {
 				return new Text(theme.fg("toolTitle", theme.bold("spar ")) + theme.fg("muted", "list"), 0, 0);
 			}
-			
+
 			if (action === "history") {
 				let text = theme.fg("toolTitle", theme.bold("spar "));
 				text += theme.fg("accent", session || "?");
 				text += theme.fg("dim", ` (history${count ? `, last ${count}` : ""})`);
 				return new Text(text, 0, 0);
 			}
-			
+
 			// For send action, show session + model (question shown in expanded result)
 			let text = theme.fg("toolTitle", theme.bold("spar "));
 			text += theme.fg("accent", session || "?");
 			if (model) {
 				text += theme.fg("dim", ` (${model})`);
 			}
-			
+
 			return new Text(text, 0, 0);
 		},
 
 		renderResult(result: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme) {
 			const { expanded, isPartial } = options;
 			const details = result.details || {};
-			
+
 			// Handle streaming/partial state
 			if (isPartial) {
 				const progress = details.progress || {};
 				const status = progress.status || details.status || "working";
 				const elapsed = progress.elapsed || 0;
 				const toolName = progress.toolName;
-				
+
 				let statusText = status;
 				if (status === "tool" && toolName) {
 					statusText = `→ ${toolName}`;
 				}
-				
+
 				return new Text(theme.fg("warning", `● ${statusText}`) + theme.fg("dim", ` (${elapsed}s)`), 0, 0);
 			}
-			
+
 			// Handle errors
 			if (result.isError || details.error) {
 				return new Text(theme.fg("error", `✗ ${details.error || "Failed"}`), 0, 0);
 			}
-			
+
 			// Handle list action
 			if (details.sessions !== undefined) {
 				const count = details.sessions.length;
@@ -367,31 +337,31 @@ spar({
 				const text = result.content?.[0]?.text || "";
 				return new Text(text, 0, 0);
 			}
-			
+
 			// Handle history action
 			if (details.exchanges !== undefined) {
 				const exchanges = details.exchanges as Array<{ user: string; assistant: string }>;
 				const count = exchanges.length;
 				const modelId = details.modelId || "assistant";
-				
+
 				if (count === 0) {
 					return new Text(theme.fg("dim", "No exchanges yet"), 0, 0);
 				}
-				
+
 				if (!expanded) {
 					// Collapsed: show summary like read tool
 					return new Text(
-						theme.fg("success", `✓ ${count} exchange${count > 1 ? "s" : ""}`) + 
-						theme.fg("dim", " (ctrl+o to expand)"), 
+						theme.fg("success", `✓ ${count} exchange${count > 1 ? "s" : ""}`) +
+						theme.fg("dim", " (ctrl+o to expand)"),
 						0, 0
 					);
 				}
-				
+
 				// Expanded: show full history from details (not truncated content)
 				const lines: string[] = [];
 				lines.push(theme.fg("accent", `Session: ${details.session}`) + theme.fg("dim", ` (${modelId})`));
 				lines.push("");
-				
+
 				for (let i = 0; i < exchanges.length; i++) {
 					const ex = exchanges[i];
 					lines.push(theme.fg("muted", `--- Exchange ${i + 1} ---`));
@@ -399,14 +369,14 @@ spar({
 					lines.push(theme.fg("dim", `${modelId}: `) + ex.assistant);
 					lines.push("");
 				}
-				
+
 				return new Text(lines.join("\n"), 0, 0);
 			}
-			
+
 			// Handle send action - show response
 			const responseText = result.content?.[0]?.text || "";
 			const usage = details.usage;
-			
+
 			if (!expanded) {
 				// Collapsed: just show success + cost (response hidden until expanded)
 				let text = theme.fg("success", "✓");
@@ -415,21 +385,21 @@ spar({
 				}
 				return new Text(text, 0, 0);
 			}
-			
+
 			// Expanded: show question + full response
 			let text = "";
-			
+
 			// Show the original question
 			if (details.message) {
 				text += theme.fg("muted", "Q: ") + details.message + "\n\n";
 			}
-			
+
 			// Show response
 			let response = responseText;
 			// Remove the usage line we added (it's in details now)
 			response = response.replace(/\n\n---\n_.*_$/, "");
 			text += theme.fg("muted", "A: ") + response;
-			
+
 			if (usage) {
 				text += "\n\n" + theme.fg("dim", `[${usage.input} in / ${usage.output} out, $${usage.cost.toFixed(4)}]`);
 			}
@@ -822,4 +792,3 @@ spar({
 		},
 	});
 }
-

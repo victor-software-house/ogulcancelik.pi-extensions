@@ -26,7 +26,7 @@ The extension provides a `spar` tool the agent can use, plus commands for viewin
 
 ### Tool: `spar`
 
-The agent uses this automatically when you ask it to consult another model:
+The agent uses this when you ask it to consult another model:
 
 ```
 "spar with gpt about whether this architecture makes sense"
