@@ -5,7 +5,9 @@
 Extract duplicated rendering primitives from `pi-diff` and `pi-pretty` into a
 shared `pi-render-core` package, then use it to give all `ssh_*` tools
 (including three new ones) the same rendering quality as their local
-counterparts.
+counterparts. Also fix a gap in pi-diff's write/edit rendering (missing line
+numbers on new file content), and extract pi-ssh-tools into a standalone repo
+for clean installation.
 
 ---
 
@@ -484,6 +486,103 @@ Commit: `refactor: replace duplicated rendering primitives with pi-render-core`
 
 ---
 
+## Phase 2a — Add line numbers to write/edit in pi-diff
+
+This is an independent pi-diff improvement, best done while we are already
+touching pi-diff in Phase 2. It fixes a gap where `write` and `edit` show
+syntax-highlighted new-file content without a line number gutter.
+
+### Current gaps
+
+| Context | Has line numbers? |
+|:--|:--|
+| `write` streaming preview (renderCall, `!argsComplete`) | ✘ |
+| `write` new file preview (renderCall, `argsComplete + isNew`) | ✘ |
+| `write` new file result (renderResult, `_type: "new"`) | ✘ |
+| `write` diff result (renderResult, `_type: "diff"`) | ✔ (via renderSplit/renderUnified) |
+| `edit` streaming diff preview (renderCall) | ✘ |
+| `edit` diff result (renderResult, `_type: "editInfo"`) | ✔ (via renderSplit/renderUnified) |
+
+### Fix: extract `renderNumberedBlock()`
+
+Add a shared helper in `src/render.ts`:
+
+```ts
+/**
+ * Render syntax-highlighted lines with a line number gutter and rule borders.
+ * Used for new-file previews in write renderCall/renderResult and edit streaming.
+ *
+ * @param lines   Already-highlighted ANSI lines from hlBlock()
+ * @param startLine  1-based line number for the first line shown
+ * @param totalLines Total line count in the full file (for truncation footer)
+ * @param expanded   If true, show all lines (no maxPreviewLines cap)
+ */
+function renderNumberedBlock(
+  lines: string[],
+  startLine: number,
+  totalLines: number,
+  expanded = false,
+): string
+```
+
+Implementation mirrors `renderFileContent()` in pi-pretty: `rule()` borders,
+`lnum()` gutter, truncation footer for hidden lines.
+
+### Apply to write renderCall (streaming)
+
+In the streaming branch (`!argsComplete`), after `hlBlock()` resolves:
+
+```ts
+hlBlock(preview.join("\n"), lg).then((hlLines) => {
+  const rendered = renderNumberedBlock(hlLines, 1, n, ctx.expanded);
+  // ... set ctx.state._streamText, ctx.invalidate()
+});
+```
+
+### Apply to write renderCall (new file, argsComplete)
+
+In the final new-file preview branch, after `hlBlock()` resolves:
+
+```ts
+hlBlock(args.content, lg).then((lines) => {
+  const rendered = renderNumberedBlock(lines, 1, lines.length, ctx.expanded);
+  // ... set ctx.state._previewText, ctx.invalidate()
+});
+```
+
+### Apply to write renderResult (`_type: "new"`)
+
+Same pattern — after `hlBlock()` resolves, wrap with `renderNumberedBlock()`.
+
+### Apply to edit renderCall (streaming diff preview)
+
+The edit streaming preview shows a raw diff preview. When only one edit
+operation is in progress, show the `newText` with line numbers using
+`renderNumberedBlock()`. For multi-edit streaming, keep the existing
+plain-text preview (too noisy to show multiple gutters mid-stream).
+
+### 2a.1 Verification
+
+```bash
+cd ~/workspace/victor/pi-diff
+bun run typecheck
+bun run lint
+```
+
+Live test in a pi session:
+- `write` a new file → streaming preview should show line numbers
+- `write` a new file (argsComplete) → call preview should show line numbers
+- `write` renderResult new file → should show line numbers
+- `edit` streaming → should show line numbers on newText preview
+- `write` / `edit` diffs → unchanged (still use renderSplit/renderUnified)
+
+### 2a.2 Commit
+
+Branch: `feat/write-line-numbers` (or fold into `refactor/use-render-core`)
+Commit: `feat: add line number gutters to write and edit new-file previews`
+
+---
+
 ## Phase 3 — Rewire pi-pretty
 
 ### 3.1 Add dependency
@@ -623,23 +722,72 @@ Commit: `refactor: replace duplicated primitives with pi-render-core, export too
 
 ---
 
-## Phase 4 — Update pi-ssh-tools
+## Phase 4 — Extract and update pi-ssh-tools
 
-### 4.1 Add dependencies
+### 4.0 Why extraction is needed
 
-In `packages/pi-ssh-tools/package.json`:
+pi-ssh-tools lives in `ogulcancelik.pi-extensions`, a monorepo. Pi's git
+resolver clones the repo root and reads its `package.json` for a `pi.extensions`
+field. The root `package.json` has no `pi` field — only
+`"workspaces": ["packages/*"]`. This means:
+
+- Installing the repo directly would auto-discover all `index.ts` files across
+  all packages, loading pi-flicker, pi-ghost, pi-spar, and others unintentionally.
+- Adding a `pi` field to the root would require manually maintaining a whitelist
+  of packages as the upstream monorepo evolves.
+- npm dep resolution within a sub-package (e.g. `pi-pretty` as a dep of
+  pi-ssh-tools) does not work correctly when pi resolves from the monorepo root.
+
+**Decision:** extract pi-ssh-tools into a standalone repo
+`victor-software-house/pi-ssh-tools`, consistent with every other package in our
+ecosystem (pi-diff, pi-pretty, pi-morph are all standalone repos).
+
+After extraction, the settings.json entry is simply:
 
 ```json
 {
+  "source": "git:git@github.com:victor-software-house/pi-ssh-tools"
+}
+```
+
+### 4.1 Create standalone repo
+
+1. Create `victor-software-house/pi-ssh-tools` on GitHub
+2. Copy `packages/pi-ssh-tools/` contents as repo root:
+   - `index.ts` → repo root
+   - `package.json` → repo root (update `name`, `repository`, `homepage`)
+   - `README.md`, `LICENSE` → repo root
+3. Add `tsconfig.json`, `biome.json` matching pi-morph's config
+4. Add `AGENTS.md` and `PLAN.md` (move this file there)
+5. Initial commit: `chore: init standalone repo from ogulcancelik.pi-extensions fork`
+
+The fork at `victor-software-house/ogulcancelik.pi-extensions` remains as the
+upstream tracking branch — future upstream patches can be cherry-picked into the
+standalone repo.
+
+### 4.2 Add dependencies
+
+In the standalone repo's `package.json`:
+
+```json
+{
+  "name": "pi-ssh-tools",
   "dependencies": {
     "pi-pretty": "git+ssh://git@github.com/victor-software-house/pi-pretty.git"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
   }
 }
 ```
 
 pi-render-core comes transitively through pi-pretty. No direct dep needed.
 
-### 4.2 Add three new tools
+### 4.3 Add three new tools
 
 **`ssh_ls`** — remote directory listing
 
@@ -665,7 +813,7 @@ pi-render-core comes transitively through pi-pretty. No direct dep needed.
 - renderCall: `ssh_grep <pattern> [host]`
 - renderResult: `renderGrepResults()` from `pi-pretty/render`
 
-### 4.3 Wire pretty rendering for all 5 existing + new tools
+### 4.4 Wire pretty rendering for all 5 existing + new tools
 
 For each tool, replace the SDK-default `renderResult` with a custom one that
 uses pi-pretty's renderers:
@@ -731,7 +879,7 @@ renderResult(result, _opt, theme, ctx) {
 **`ssh_write` and `ssh_edit`:** Keep SDK defaults. pi-pretty does not enhance
 write/edit — pi-diff does (separate concern, separate dependency chain).
 
-### 4.4 Update constants and registration
+### 4.5 Update constants and registration
 
 Update `SSH_TOOL_NAMES`:
 
@@ -745,7 +893,7 @@ const SSH_TOOL_NAMES = [
 Update `enableSshTools()` / `disableSshTools()` — already generic over
 `SSH_TOOL_NAMES`, so adding entries is sufficient.
 
-### 4.5 Update prompt snippets and guidelines
+### 4.6 Update prompt snippets and guidelines
 
 Add to `before_agent_start` system prompt injection:
 
@@ -761,39 +909,38 @@ Add prompt guidelines for the new tools:
 - `ssh_find`: "Find files by glob pattern on the active SSH host."
 - `ssh_grep`: "Search file contents on the active SSH host."
 
-### 4.6 Update package.json
-
-```json
-{
-  "dependencies": {
-    "pi-pretty": "git+ssh://git@github.com/victor-software-house/pi-pretty.git"
-  }
-}
-```
-
-Add `"files"` entry if needed for new source files.
-
 ### 4.7 Verification
 
 ```bash
-cd ~/workspace/victor/ogulcancelik.pi-extensions
-npm install   # or bun install at monorepo root
-cd packages/pi-ssh-tools
-# typecheck (if tsconfig exists, or use pi's jiti loading)
+cd ~/workspace/victor/pi-ssh-tools
+bun install
+bun run typecheck
 ```
 
-Live test in a pi session:
+Live test in a pi session (install from local path first):
+
+```json
+{ "source": "path:/Users/victor/workspace/victor/pi-ssh-tools" }
+```
+
 1. `/ssh victor-hostinger`
-2. `ssh_read` a .ts file → should show syntax-highlighted output with line numbers
-3. `ssh_bash` a command → should show colored exit status + formatted output
-4. `ssh_ls` a directory → should show tree view with icons
-5. `ssh_find` a pattern → should show grouped results with icons
-6. `ssh_grep` a pattern → should show highlighted matches with line numbers
-7. `/ssh off` → SSH tools should deactivate
+2. `ssh_read` a .ts file → syntax-highlighted output with line numbers
+3. `ssh_bash` a command → colored exit status + formatted output
+4. `ssh_ls` a directory → tree view with icons
+5. `ssh_find` a pattern → grouped results with icons
+6. `ssh_grep` a pattern → highlighted matches with line numbers
+7. `/ssh off` → SSH tools deactivate
+
+Then switch to git source and re-verify:
+
+```json
+{ "source": "git:git@github.com:victor-software-house/pi-ssh-tools" }
+```
 
 ### 4.8 Commit
 
-Branch: `feat/pretty-rendering`
+Repo: `victor-software-house/pi-ssh-tools`
+Branch: `main` (initial development)
 Commit: `feat: add ssh_ls, ssh_find, ssh_grep; wire pi-pretty rendering for all ssh tools`
 
 ---
@@ -806,8 +953,9 @@ Each phase is an independent branch. Rollback any phase without affecting others
 |:--|:--|
 | 1 (pi-render-core) | Delete repo. No consumers yet. |
 | 2 (pi-diff) | Revert branch. pi-morph continues using old pi-diff. |
+| 2a (write/edit line numbers) | Revert branch or revert commits. No consumers depend on this. |
 | 3 (pi-pretty) | Revert branch. Extension continues with self-contained code. |
-| 4 (pi-ssh-tools) | Revert branch. SSH tools continue with SDK defaults. |
+| 4 (pi-ssh-tools) | Revert branch. SSH tools continue with SDK defaults. Standalone repo can be deleted. |
 
 If a consumer breaks after merging:
 - All packages use git SSH deps, so pinning to a specific commit is trivial:
@@ -832,10 +980,11 @@ If a consumer breaks after merging:
 ## Execution order summary
 
 ```
-Phase 1: Create pi-render-core         [zero blast radius]
-Phase 2: Rewire pi-diff                [verify pi-morph contract]
-Phase 3: Rewire pi-pretty              [verify tool rendering]
-Phase 4: Update pi-ssh-tools           [the actual feature]
+Phase 1:  Create pi-render-core         [zero blast radius]
+Phase 2:  Rewire pi-diff                [verify pi-morph contract]
+Phase 2a: Write/edit line numbers       [pi-diff improvement, independent]
+Phase 3:  Rewire pi-pretty              [verify tool rendering]
+Phase 4:  Extract + update pi-ssh-tools [the actual feature]
 ```
 
 Each phase gate: typecheck + lint + live test before proceeding to next.
